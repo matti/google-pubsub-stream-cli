@@ -46,6 +46,20 @@ func (m Message) JSON() string {
 	return string(obj)
 }
 
+// PublishMessage ...
+func PublishMessage(ctx context.Context, topic *pubsub.Topic, body []byte) {
+	m := pubsub.Message{
+		Data: body,
+	}
+	publishResult := topic.Publish(ctx, &m)
+	id, err := publishResult.Get(ctx)
+	if err != nil {
+		log.Fatalln("publish error", err)
+	} else {
+		log.Println("published", id)
+	}
+}
+
 var inflight = new(sync.Map)
 
 func handle(ctx context.Context, msg *pubsub.Message) {
@@ -81,6 +95,13 @@ func main() {
 	}
 
 	switch mode {
+	case "push":
+		topic := client.Topic(subscriptionName)
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		body := scanner.Bytes()
+
+		PublishMessage(ctx, topic, body)
 	case "publish":
 		topic := client.Topic(subscriptionName)
 
@@ -88,17 +109,7 @@ func main() {
 			scanner := bufio.NewScanner(os.Stdin)
 			for scanner.Scan() {
 				body := scanner.Bytes()
-				m := pubsub.Message{
-					Data: body,
-				}
-
-				publishResult := topic.Publish(ctx, &m)
-				id, err := publishResult.Get(ctx)
-				if err != nil {
-					log.Fatalln("publish error", err)
-				} else {
-					log.Println("published", id)
-				}
+				PublishMessage(ctx, topic, body)
 			}
 		}
 	case "subscribe":
