@@ -25,11 +25,9 @@ type Message struct {
 	DeliveryAttempt *int              `json:"deliveryAttempt"`
 }
 
-var inflight = new(sync.Map)
-
-func handle(ctx context.Context, msg *pubsub.Message) {
-	inflight.Store(msg.ID, msg)
-	m := Message{
+// NewMessage ...
+func NewMessage(msg *pubsub.Message) Message {
+	return Message{
 		msg.ID,
 		string(msg.Data),
 		msg.PublishTime,
@@ -37,44 +35,98 @@ func handle(ctx context.Context, msg *pubsub.Message) {
 		msg.OrderingKey,
 		msg.DeliveryAttempt,
 	}
+}
 
+// JSON ...
+func (m Message) JSON() string {
 	obj, err := json.Marshal(m)
 	if err != nil {
 		log.Panicf("json.Marshal: %v", err)
 	}
-	log.Println(string(obj))
-	fmt.Println(string(obj))
+	return string(obj)
+}
+
+var inflight = new(sync.Map)
+
+func handle(ctx context.Context, msg *pubsub.Message) {
+	inflight.Store(msg.ID, msg)
+	m := NewMessage(msg)
+
+	log.Println(m.JSON())
+	fmt.Println(m.JSON())
 }
 
 func main() {
 	ctx := context.Background()
 
-	credentials, err := google.FindDefaultCredentials(ctx)
-	if err != nil {
-		log.Panicf("google.FindDefaultCredentials: %v", err)
+	projectName := os.Args[1]
+	subscriptionName := os.Args[2]
+	mode := os.Args[3]
+
+	var opts []option.ClientOption
+	if path, ok := os.LookupEnv("GOOGLE_APPLICATION_CREDENTIALS"); ok {
+		opts = append(opts, option.WithCredentialsFile(path))
+	} else {
+		credentials, err := google.FindDefaultCredentials(ctx)
+		if err != nil {
+			log.Panicf("google.FindDefaultCredentials: %v", err)
+		}
+
+		opts = append(opts, option.WithCredentials(credentials))
 	}
 
-	client, err := pubsub.NewClient(ctx, "botway", option.WithCredentials(credentials))
+	client, err := pubsub.NewClient(ctx, projectName, opts...)
 	if err != nil {
 		log.Panicf("pubsub.NewClient: %v", err)
 	}
 
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			id := scanner.Text()
-			m, loaded := inflight.LoadAndDelete(id)
-			if loaded {
-				m.(*pubsub.Message).Ack()
-				log.Println("ack", "done", id)
-			} else {
-				log.Println("ack", "notfound", id)
+	switch mode {
+	case "publish":
+		topic := client.Topic(subscriptionName)
+
+		for {
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				body := scanner.Bytes()
+				m := pubsub.Message{
+					Data: body,
+				}
+
+				publishResult := topic.Publish(ctx, &m)
+				id, err := publishResult.Get(ctx)
+				if err != nil {
+					log.Fatalln("publish error", err)
+				} else {
+					log.Println("published", id)
+				}
 			}
-
 		}
-	}()
+	case "subscribe":
+		go func() {
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				id := scanner.Text()
+				m, loaded := inflight.LoadAndDelete(id)
+				if loaded {
+					m.(*pubsub.Message).Ack()
+					log.Println("ack", "done", id)
+				} else {
+					log.Println("ack", "notfound", id)
+				}
+			}
+		}()
 
-	subscriptionName := os.Args[1]
-	sub := client.Subscription(subscriptionName)
-	sub.Receive(ctx, handle)
+		sub := client.Subscription(subscriptionName)
+		log.Println("subscribed to", subscriptionName)
+		sub.Receive(ctx, handle)
+	case "drain":
+		sub := client.Subscription(subscriptionName)
+		sub.Receive(ctx, func(ctx context.Context, msg *pubsub.Message) {
+			m := NewMessage(msg)
+			log.Println(m.JSON())
+			fmt.Println(m.JSON())
+			msg.Ack()
+		})
+	}
+
 }
