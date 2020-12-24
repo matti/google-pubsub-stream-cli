@@ -97,10 +97,14 @@ func main() {
 	switch mode {
 	case "push":
 		topic := client.Topic(subscriptionName)
-		scanner := bufio.NewScanner(os.Stdin)
-		scanner.Scan()
-		body := scanner.Bytes()
-
+		var body []byte
+		if len(os.Args) > 4 {
+			body = []byte(os.Args[4])
+		} else {
+			scanner := bufio.NewScanner(os.Stdin)
+			scanner.Scan()
+			body = scanner.Bytes()
+		}
 		PublishMessage(ctx, topic, body)
 	case "publish":
 		topic := client.Topic(subscriptionName)
